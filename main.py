@@ -72,14 +72,10 @@ class Player:
     
     def move_left(self):
         self.x -= PLAYER_SPEED
-        if self.x < 0:
-            self.x = 0
         self.rect.x = self.x
     
     def move_right(self):
         self.x += PLAYER_SPEED
-        if self.x > SCREEN_WIDTH - self.width:
-            self.x = SCREEN_WIDTH - self.width
         self.rect.x = self.x
     
     def draw(self, screen):
@@ -174,6 +170,19 @@ class Bush:
         # Draw bush as a green ellipse
         pygame.draw.ellipse(screen, GREEN, (self.x, self.y, self.width, self.height))
 
+class Grass:
+    def __init__(self, x, y, height):
+        self.x = x
+        self.y = y
+        self.height = height
+        self.width = 2
+        self.color = (0, random.randint(150, 200), 0)
+
+    def draw(self, screen, screen_offset_x):
+        adjusted_x = self.x - screen_offset_x
+        if -10 < adjusted_x < SCREEN_WIDTH + 10:  # Only draw if visible
+            pygame.draw.line(screen, self.color, (adjusted_x, self.y), (adjusted_x, self.y - self.height), self.width)
+
 class Game:
     def __init__(self):
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
@@ -189,7 +198,9 @@ class Game:
         self.items = []
         self.trees = []
         self.bushes = []
-        self.world_offset = 0  # How much the world has moved
+        self.grass = []
+        self.screen_offset_x = 0  # How much the screen has moved (for following player)
+        self.world_start_x = 0  # Leftmost position the player can go to
         self.last_item_spawn = time.time()
         self.save_file = "savegame.json"
         
@@ -199,21 +210,31 @@ class Game:
     def generate_world(self):
         # Generate initial platforms
         self.platforms = [
-            pygame.Rect(0, SCREEN_HEIGHT - 40, SCREEN_WIDTH, 40),  # Ground
+            pygame.Rect(0, SCREEN_HEIGHT - 40, 5000, 40),  # Extended ground
         ]
         
         # Generate initial trees and bushes
         self.trees = []
         self.bushes = []
+        self.grass = []
         
-        # Generate some initial trees and bushes in the visible area and beyond
-        for i in range(20):
-            x = random.randint(-100, SCREEN_WIDTH + 200)
+        # Generate extended world elements
+        for i in range(300):  # More elements for extended world
+            x = random.randint(0, 5000)
             y = SCREEN_HEIGHT - 100
-            if random.random() < 0.5:
-                self.trees.append(Tree(x, y))
+            
+            # Add trees (20-300% of player height)
+            if random.random() < 0.05:  # 5% chance
+                tree_height = random.randint(60, 90)  # 200-300% of player height (30px)
+                self.trees.append(Tree(x, y - tree_height + 30))  # Adjust for tree dimensions
+            # Add bushes (10-30% of player height)
+            elif random.random() < 0.15:  # 15% chance of bush if not tree
+                bush_height = random.randint(3, 9)  # 10-30% of player height
+                self.bushes.append(Bush(x, y - bush_height))
+            # Add grass (2-5% of player height)
             else:
-                self.bushes.append(Bush(x, y))
+                grass_height = random.randint(1, 2)  # 2-5% of player height (30px * 0.02-0.05)
+                self.grass.append(Grass(x, y, grass_height))
     
     def spawn_item(self):
         # Randomly decide if an item should spawn
@@ -233,8 +254,8 @@ class Game:
             else:
                 item_type = ItemType.GOLD_COIN
             
-            # Spawn item at a random position on the ground
-            x = random.randint(50, SCREEN_WIDTH - 50)
+            # Spawn item at a position in the world ahead of the player (in visible area)
+            x = self.screen_offset_x + random.randint(SCREEN_WIDTH//2, SCREEN_WIDTH + 200)
             y = SCREEN_HEIGHT - 60  # Above the ground platform
             
             self.items.append(Item(x, y, item_type))
@@ -265,18 +286,20 @@ class Game:
     def start_new_game(self):
         self.game_state = "PLAYING"
         self.score = 0
+        # Start player at center of screen with appropriate world offset
+        self.screen_offset_x = 0  # Start at beginning of world
         self.player = Player(SCREEN_WIDTH // 2, SCREEN_HEIGHT - 100)
         self.items = []
-        self.world_offset = 0
         self.last_item_spawn = time.time()
         self.generate_world()
+        self.world_start_x = 0  # Reset the leftmost position
     
     def load_game(self):
         try:
             with open(self.save_file, 'r') as f:
                 save_data = json.load(f)
                 self.score = save_data.get('score', 0)
-                self.world_offset = save_data.get('world_offset', 0)
+                self.screen_offset_x = save_data.get('screen_offset_x', 0)
                 self.items = []
                 
                 # Recreate items from save data
@@ -288,6 +311,7 @@ class Game:
                 
                 self.player = Player(save_data.get('player_x', SCREEN_WIDTH // 2), 
                                    save_data.get('player_y', SCREEN_HEIGHT - 100))
+                self.world_start_x = save_data.get('world_start_x', 0)
             
             self.game_state = "PLAYING"
         except FileNotFoundError:
@@ -297,9 +321,10 @@ class Game:
     def save_game(self):
         save_data = {
             'score': self.score,
-            'world_offset': self.world_offset,
+            'screen_offset_x': self.screen_offset_x,
             'player_x': self.player.x,
             'player_y': self.player.y,
+            'world_start_x': self.world_start_x,
             'items': [
                 {
                     'type': item.type.name,
@@ -318,40 +343,72 @@ class Game:
         if self.game_state == "PLAYING":
             # Handle player movement
             keys = pygame.key.get_pressed()
+            
+            # Calculate potential new player position
+            new_player_x = self.player.x
             if keys[pygame.K_LEFT]:
-                self.player.move_left()
+                new_player_x -= PLAYER_SPEED
             if keys[pygame.K_RIGHT]:
+                new_player_x += PLAYER_SPEED
+            
+            # Check if player is trying to go left of the world start
+            if new_player_x < self.world_start_x and keys[pygame.K_LEFT]:
+                # Don't allow movement beyond the left boundary
+                pass
+            elif keys[pygame.K_LEFT]:
+                # Moving left, but not beyond the boundary
+                self.player.move_left()
+            elif keys[pygame.K_RIGHT]:
+                # Moving right - update player and move screen
                 self.player.move_right()
             
-            # Update player
+            # Update player (apply gravity and collision)
             self.player.update(self.platforms)
             
-            # Move world to create movement effect
-            self.world_offset += MAP_SPEED
+            # Implement screen following - keep player centered horizontally
+            target_offset = self.player.x - SCREEN_WIDTH // 2
+            
+            # Only move the screen if player is moving right (exploring new area)
+            if target_offset > self.screen_offset_x:
+                self.screen_offset_x = target_offset
+            # If player moves left, check if they're near the left edge of the screen
+            elif self.player.x < SCREEN_WIDTH // 4 and self.screen_offset_x > 0:
+                # Move screen back to keep player in left portion of screen
+                self.screen_offset_x = self.player.x - SCREEN_WIDTH // 4
+                # Don't let screen go past the start of the world
+                if self.screen_offset_x < 0:
+                    self.screen_offset_x = 0
+                    # Adjust player position if needed
+                    if self.player.x < SCREEN_WIDTH // 4:
+                        self.player.x = SCREEN_WIDTH // 4
             
             # Update items and remove those that are off-screen or expired
             for item in self.items[:]:  # Use slice to iterate over a copy
                 item.update()
                 
-                # Move item with the world
-                item.x -= MAP_SPEED
-                item.rect.x = item.x
+                # Items stay in world position, no need to move them with screen
                 
-                # Check if item is off-screen to the left
-                if item.x < -50:
-                    self.items.remove(item)
+                # Check if item is off-screen to the left (past where player can return)
+                if item.x < self.world_start_x - 50:
+                    if item in self.items:
+                        self.items.remove(item)
                 
                 # Check for collision with player
-                if self.player.rect.colliderect(item.rect):
+                # Player is always at center of screen, so use screen-centered coordinates for collision
+                player_rect = pygame.Rect(SCREEN_WIDTH // 2, self.player.y, self.player.width, self.player.height)
+                item_rect = pygame.Rect(item.x - self.screen_offset_x, item.y, item.width, item.height)
+                
+                if player_rect.colliderect(item_rect):
                     self.score += item.points
-                    self.items.remove(item)
+                    if item in self.items:
+                        self.items.remove(item)
                 
                 # Remove expired items
                 if item.should_remove:
                     if item in self.items:
                         self.items.remove(item)
             
-            # Spawn new items periodically
+            # Spawn new items periodically in front of the player
             if time.time() - self.last_item_spawn > 2:  # Spawn every 2 seconds
                 self.spawn_item()
                 self.last_item_spawn = time.time()
@@ -391,23 +448,56 @@ class Game:
         # Draw ground
         pygame.draw.rect(self.screen, (101, 67, 33), (0, SCREEN_HEIGHT - 40, SCREEN_WIDTH, 40))  # Brown ground
         
+        # Draw grass
+        for grass in self.grass:
+            grass.draw(self.screen, self.screen_offset_x)
+        
         # Draw trees and bushes (with offset)
         for tree in self.trees:
-            adjusted_x = tree.x - self.world_offset
+            adjusted_x = tree.x - self.screen_offset_x
             if -50 < adjusted_x < SCREEN_WIDTH + 50:  # Only draw if visible
-                tree.draw(self.screen)
+                # Draw tree with screen offset
+                # Draw trunk
+                pygame.draw.rect(self.screen, BROWN, (adjusted_x + 12, tree.y + 30, 6, 30))
+                # Draw leaves
+                pygame.draw.ellipse(self.screen, DARK_GREEN, (adjusted_x, tree.y, tree.width, 40))
         
         for bush in self.bushes:
-            adjusted_x = bush.x - self.world_offset
+            adjusted_x = bush.x - self.screen_offset_x
             if -50 < adjusted_x < SCREEN_WIDTH + 50:  # Only draw if visible
-                bush.draw(self.screen)
+                # Draw bush with screen offset
+                pygame.draw.ellipse(self.screen, GREEN, (adjusted_x, bush.y, bush.width, bush.height))
         
         # Draw items
         for item in self.items:
-            item.draw(self.screen)
+            # Draw item with screen offset
+            adjusted_x = item.x - self.screen_offset_x
+            
+            # Only draw if item is visible on screen
+            if -20 < adjusted_x < SCREEN_WIDTH + 20 and item.blink_visible:
+                # Draw different shapes based on item type
+                if item.type == ItemType.CLAY_POT:
+                    # Draw pot shape
+                    pygame.draw.ellipse(self.screen, item.color, (adjusted_x, item.y, item.width, item.height//2))
+                    pygame.draw.rect(self.screen, item.color, (adjusted_x, item.y + item.height//2 - 3, item.width, 6))
+                elif item.type == ItemType.CLAY_BOWL:
+                    # Draw bowl shape
+                    pygame.draw.ellipse(self.screen, item.color, (adjusted_x, item.y, item.width, item.height//2))
+                elif item.type == ItemType.WOODEN_SWORD or item.type == ItemType.IRON_SWORD:
+                    # Draw sword shape
+                    pygame.draw.rect(self.screen, item.color, (adjusted_x + item.width//2 - 2, item.y, 4, item.height))
+                    pygame.draw.rect(self.screen, (200, 200, 200), (adjusted_x + item.width//2 - 4, item.y + 5, 8, 3))  # hilt
+                elif item.type == ItemType.GOLD_COIN:
+                    # Draw coin shape
+                    pygame.draw.circle(self.screen, item.color, (adjusted_x + item.width//2, item.y + item.height//2), item.width//2)
         
-        # Draw player
-        self.player.draw(self.screen)
+        # Draw player (always centered on screen)
+        player_screen_x = SCREEN_WIDTH // 2
+        # Temporarily create a player to draw at the correct screen position
+        temp_player = Player(player_screen_x, self.player.y)
+        temp_player.width = self.player.width
+        temp_player.height = self.player.height
+        temp_player.draw(self.screen)
         
         # Draw score
         score_text = self.font.render(f"SCORE: {self.score}", True, WHITE)
