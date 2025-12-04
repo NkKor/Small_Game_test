@@ -47,6 +47,10 @@ class Player:
         self.vel_y = 0
         self.jumping = False
         self.rect = pygame.Rect(x, y, self.width, self.height)
+        self.step_counter = 0  # For leg animation
+        self.left_leg_height = 10
+        self.right_leg_height = 10
+        self.animation_speed = 0.2  # Speed of leg animation
         
     def update(self, platforms):
         # Apply gravity
@@ -56,6 +60,20 @@ class Player:
         # Update rect position
         self.rect.x = self.x
         self.rect.y = self.y
+        
+        # Update leg animation when moving
+        if abs(self.vel_y) < 0.1:  # Not falling/jumping
+            self.step_counter += self.animation_speed
+            # Animate legs when moving horizontally
+            keys = pygame.key.get_pressed()
+            if keys[pygame.K_LEFT] or keys[pygame.K_RIGHT]:
+                # Alternate leg heights to simulate stepping
+                self.left_leg_height = 10 + int(3 * abs(pygame.math.sin(self.step_counter)))
+                self.right_leg_height = 10 + int(3 * abs(pygame.math.cos(self.step_counter)))
+            else:
+                # Reset to default when not moving
+                self.left_leg_height = 10
+                self.right_leg_height = 10
         
         # Check for collisions with platforms
         for platform in platforms:
@@ -89,9 +107,13 @@ class Player:
         pygame.draw.rect(screen, HAT_COLOR, (self.x + self.width//2 - 10, self.y, 20, 5))
         pygame.draw.rect(screen, HAT_COLOR, (self.x + self.width//2 - 12, self.y + 3, 24, 3))
         
-        # Draw legs
-        pygame.draw.rect(screen, CLOTH_COLOR, (self.x + 3, self.y + 25, 5, 10))
-        pygame.draw.rect(screen, CLOTH_COLOR, (self.x + 12, self.y + 25, 5, 10))
+        # Draw animated legs
+        pygame.draw.rect(screen, CLOTH_COLOR, (self.x + 3, self.y + 25, 5, self.left_leg_height))
+        pygame.draw.rect(screen, CLOTH_COLOR, (self.x + 12, self.y + 25, 5, self.right_leg_height))
+        
+        # Draw feet
+        pygame.draw.ellipse(screen, (50, 50, 50), (self.x + 2, self.y + 25 + self.left_leg_height, 7, 5))
+        pygame.draw.ellipse(screen, (50, 50, 50), (self.x + 11, self.y + 25 + self.right_leg_height, 7, 5))
         
         # Draw arms
         pygame.draw.rect(screen, SKIN_COLOR, (self.x - 3, self.y + 12, 5, 8))
@@ -203,38 +225,94 @@ class Game:
         self.world_start_x = 0  # Leftmost position the player can go to
         self.last_item_spawn = time.time()
         self.save_file = "savegame.json"
+        self.ground_y = SCREEN_HEIGHT - 40  # Ground level
+        self.world_width = 5000  # Starting world width
         
         # Initialize the game world
         self.generate_world()
     
     def generate_world(self):
-        # Generate initial platforms
-        self.platforms = [
-            pygame.Rect(0, SCREEN_HEIGHT - 40, 5000, 40),  # Extended ground
-        ]
+        # Generate initial platforms with holes
+        self.platforms = []
+        x = 0
+        while x < self.world_width:
+            # Randomly decide if we should have a hole
+            if random.random() < 0.1:  # 10% chance for a hole
+                # Create a hole (skip platform generation for this area)
+                hole_width = random.randint(15, 30)  # Hole width: half player height to 1.5x player height
+                x += hole_width
+            else:
+                # Create a platform segment
+                segment_width = random.randint(50, 200)  # Random segment length
+                platform = pygame.Rect(x, self.ground_y, segment_width, 40)
+                self.platforms.append(platform)
+                x += segment_width
         
         # Generate initial trees and bushes
         self.trees = []
         self.bushes = []
         self.grass = []
         
-        # Generate extended world elements
-        for i in range(300):  # More elements for extended world
-            x = random.randint(0, 5000)
-            y = SCREEN_HEIGHT - 100
+        # Generate world elements based on platforms
+        for platform in self.platforms:
+            platform_start = platform.x
+            platform_end = platform.x + platform.width
             
-            # Add trees (20-300% of player height)
-            if random.random() < 0.05:  # 5% chance
-                tree_height = random.randint(60, 90)  # 200-300% of player height (30px)
-                self.trees.append(Tree(x, y - tree_height + 30))  # Adjust for tree dimensions
-            # Add bushes (10-30% of player height)
-            elif random.random() < 0.15:  # 15% chance of bush if not tree
-                bush_height = random.randint(3, 9)  # 10-30% of player height
-                self.bushes.append(Bush(x, y - bush_height))
-            # Add grass (2-5% of player height)
+            # Add elements along this platform segment
+            x = platform_start
+            while x < platform_end:
+                # Add trees (20-300% of player height)
+                if random.random() < 0.05:  # 5% chance
+                    tree_height = random.randint(60, 90)  # 200-300% of player height (30px)
+                    self.trees.append(Tree(x, self.ground_y - tree_height))
+                # Add bushes (10-30% of player height)
+                elif random.random() < 0.15:  # 15% chance of bush if not tree
+                    bush_height = random.randint(3, 9)  # 10-30% of player height
+                    self.bushes.append(Bush(x, self.ground_y - bush_height))
+                # Add grass (2-5% of player height)
+                elif random.random() < 0.7:  # 70% chance of grass if not tree or bush
+                    grass_height = random.randint(1, 2)  # 2-5% of player height (30px * 0.02-0.05)
+                    self.grass.append(Grass(x, self.ground_y, grass_height))
+                
+                x += random.randint(5, 20)  # Space between elements
+    
+    def extend_world(self):
+        # Extend the world by adding more platforms and elements
+        # Find the rightmost platform
+        rightmost_x = max([p.x + p.width for p in self.platforms]) if self.platforms else 0
+        
+        # Add new platforms to extend the world
+        x = rightmost_x
+        while x < rightmost_x + 1000:  # Add 1000 pixels worth of new platforms
+            if random.random() < 0.1:  # 10% chance for a hole
+                # Create a hole (skip platform generation for this area)
+                hole_width = random.randint(15, 30)
+                x += hole_width
             else:
-                grass_height = random.randint(1, 2)  # 2-5% of player height (30px * 0.02-0.05)
-                self.grass.append(Grass(x, y, grass_height))
+                # Create a platform segment
+                segment_width = random.randint(50, 200)
+                platform = pygame.Rect(x, self.ground_y, segment_width, 40)
+                self.platforms.append(platform)
+                
+                # Add elements to the new platform segment
+                x_elem = x
+                while x_elem < x + segment_width:
+                    if random.random() < 0.05:  # 5% chance for tree
+                        tree_height = random.randint(60, 90)
+                        self.trees.append(Tree(x_elem, self.ground_y - tree_height))
+                    elif random.random() < 0.15:  # 15% chance for bush
+                        bush_height = random.randint(3, 9)
+                        self.bushes.append(Bush(x_elem, self.ground_y - bush_height))
+                    elif random.random() < 0.7:  # 70% chance for grass
+                        grass_height = random.randint(1, 2)
+                        self.grass.append(Grass(x_elem, self.ground_y, grass_height))
+                    
+                    x_elem += random.randint(5, 20)
+                
+                x += segment_width
+        
+        # Update world width
+        self.world_width = max(self.world_width, rightmost_x + 1000)
     
     def spawn_item(self):
         # Randomly decide if an item should spawn
@@ -256,7 +334,7 @@ class Game:
             
             # Spawn item at a position in the world ahead of the player (in visible area)
             x = self.screen_offset_x + random.randint(SCREEN_WIDTH//2, SCREEN_WIDTH + 200)
-            y = SCREEN_HEIGHT - 60  # Above the ground platform
+            y = self.ground_y - 30  # Above the ground platform
             
             self.items.append(Item(x, y, item_type))
     
@@ -352,35 +430,45 @@ class Game:
                 new_player_x += PLAYER_SPEED
             
             # Check if player is trying to go left of the world start
-            if new_player_x < self.world_start_x and keys[pygame.K_LEFT]:
+            if new_player_x < self.world_start_x:
                 # Don't allow movement beyond the left boundary
-                pass
-            elif keys[pygame.K_LEFT]:
-                # Moving left, but not beyond the boundary
-                self.player.move_left()
-            elif keys[pygame.K_RIGHT]:
-                # Moving right - update player and move screen
-                self.player.move_right()
+                self.player.x = self.world_start_x
+            else:
+                # Apply movement
+                if keys[pygame.K_LEFT]:
+                    self.player.move_left()
+                if keys[pygame.K_RIGHT]:
+                    self.player.move_right()
             
             # Update player (apply gravity and collision)
             self.player.update(self.platforms)
             
-            # Implement screen following - keep player centered horizontally
-            target_offset = self.player.x - SCREEN_WIDTH // 2
+            # Implement screen following with proper logic
+            # Screen follows player only when moving right from center
+            player_screen_pos = self.player.x - self.screen_offset_x
             
-            # Only move the screen if player is moving right (exploring new area)
-            if target_offset > self.screen_offset_x:
-                self.screen_offset_x = target_offset
-            # If player moves left, check if they're near the left edge of the screen
-            elif self.player.x < SCREEN_WIDTH // 4 and self.screen_offset_x > 0:
+            # If player is past the right half of the screen, move the screen
+            if player_screen_pos > SCREEN_WIDTH * 0.6:  # Player is past 60% of screen width
+                # Move screen to keep player in right portion of screen
+                self.screen_offset_x = self.player.x - int(SCREEN_WIDTH * 0.6)
+            # If player is too far left (past 40% of screen), move screen back
+            elif player_screen_pos < SCREEN_WIDTH * 0.4 and self.screen_offset_x > 0:
                 # Move screen back to keep player in left portion of screen
-                self.screen_offset_x = self.player.x - SCREEN_WIDTH // 4
+                self.screen_offset_x = self.player.x - int(SCREEN_WIDTH * 0.4)
                 # Don't let screen go past the start of the world
                 if self.screen_offset_x < 0:
                     self.screen_offset_x = 0
                     # Adjust player position if needed
-                    if self.player.x < SCREEN_WIDTH // 4:
-                        self.player.x = SCREEN_WIDTH // 4
+                    self.player.x = int(SCREEN_WIDTH * 0.4)
+            
+            # Ensure player doesn't go past the left edge of the world
+            if self.player.x < self.world_start_x:
+                self.player.x = self.world_start_x
+            
+            # Generate new platforms and elements as the player moves right
+            if self.screen_offset_x > self.world_width - SCREEN_WIDTH * 2:
+                # Extend the world if needed
+                self.extend_world()
             
             # Update items and remove those that are off-screen or expired
             for item in self.items[:]:  # Use slice to iterate over a copy
@@ -445,8 +533,13 @@ class Game:
         # Draw sky background
         self.screen.fill((135, 206, 235))  # Sky blue
         
-        # Draw ground
-        pygame.draw.rect(self.screen, (101, 67, 33), (0, SCREEN_HEIGHT - 40, SCREEN_WIDTH, 40))  # Brown ground
+        # Draw platforms (ground segments with holes)
+        for platform in self.platforms:
+            # Calculate adjusted platform position based on screen offset
+            adjusted_x = platform.x - self.screen_offset_x
+            # Only draw if platform is visible on screen
+            if -50 < adjusted_x < SCREEN_WIDTH + 50:
+                pygame.draw.rect(self.screen, (101, 67, 33), (adjusted_x, platform.y, platform.width, platform.height))  # Brown ground
         
         # Draw grass
         for grass in self.grass:
@@ -497,6 +590,8 @@ class Game:
         temp_player = Player(player_screen_x, self.player.y)
         temp_player.width = self.player.width
         temp_player.height = self.player.height
+        temp_player.left_leg_height = self.player.left_leg_height
+        temp_player.right_leg_height = self.player.right_leg_height
         temp_player.draw(self.screen)
         
         # Draw score
