@@ -1,4 +1,11 @@
-```
+.venv/
 __pycache__/
 *.pyc
-```
+.DS_Store
+savegame.json
+
+# Node / Electron
+node_modules/
+dist/
+out/
+npm-debug.log*

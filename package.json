@@ -1,0 +1,16 @@
+{
+  "name": "pixelcraft",
+  "productName": "PixelCraft",
+  "version": "3.3.0",
+  "description": "PixelCraft — воксельная песочница на гексагональных призмах (Three.js + Electron)",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "start:nosandbox": "electron . --no-sandbox"
+  },
+  "author": "NkKor",
+  "license": "GPL-3.0",
+  "devDependencies": {
+    "electron": "^44.7.0"
+  }
+}

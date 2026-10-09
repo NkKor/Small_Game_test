@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'" />
+<title>PixelCraft — 3D voxel sandbox</title>
+<style>
+  :root {
+    --accent: #9fe0ff;
+    /* формы-гексагоны для UI (pointy-top совпадает с блоками в мире) */
+    --hex-pointy: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+    --hex-flat:   polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%);
+    --hex-slim:   polygon(9% 0%, 91% 0%, 100% 50%, 91% 100%, 9% 100%, 0% 50%);
+    --hex-wide:   polygon(7% 0%, 93% 0%, 100% 50%, 93% 100%, 7% 100%, 0% 50%);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #87ceeb;
+    user-select: none; -webkit-user-select: none; }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; }
+
+  /* ---------- Прицел (гексагональный) ---------- */
+  #crosshair {
+    position: fixed; left: 50%; top: 50%; width: 26px; height: 30px;
+    transform: translate(-50%, -50%); pointer-events: none; z-index: 10;
+    opacity: 0.9; filter: drop-shadow(0 0 2px rgba(0,0,0,0.9));
+  }
+  #crosshair svg { width: 100%; height: 100%; display: block; }
+  #crosshair polygon { fill: none; stroke: #fff; stroke-width: 7; }
+  #crosshair circle { fill: #fff; }
+
+  /* ---------- HUD ---------- */
+  #hud {
+    position: fixed; left: 12px; top: 12px; z-index: 10;
+    font: 13px/1.5 "Consolas", "Courier New", monospace;
+    color: #fff; text-shadow: 0 1px 2px #000; pointer-events: none;
+    white-space: pre;
+  }
+  #hud b { color: var(--accent); font-weight: 600; }
+
+  /* ---------- Название выбранного блока (гекс-табличка) ---------- */
+  #itemname {
+    position: fixed; left: 50%; bottom: 86px; transform: translateX(-50%);
+    z-index: 10; pointer-events: none;
+    min-width: 110px; text-align: center;
+    padding: 6px 20px; clip-path: var(--hex-slim);
+    background: rgba(8, 20, 30, 0.74);
+    color: #eaf6ff; font: 600 13px/1 "Segoe UI", system-ui, sans-serif;
+    letter-spacing: .3px; text-shadow: 0 1px 2px #000;
+    opacity: 0; transition: opacity .25s;
+  }
+  #itemname.show { opacity: 1; }
+
+  /* ---------- Хотбар (ряд гекс-слотов) ---------- */
+  #hotbar {
+    position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
+    display: flex; gap: 5px; align-items: flex-end; z-index: 10; pointer-events: none;
+  }
+  .slot {
+    position: relative; width: 52px; height: 60px;
+    transition: transform .1s ease;
+  }
+  .slot::before, .slot::after { content: ""; position: absolute; clip-path: var(--hex-pointy); }
+  .slot::before { inset: 0; background: rgba(255, 255, 255, 0.34); }   /* «обводка» */
+  .slot::after  { inset: 2px; background: rgba(12, 18, 24, 0.80); }    /* фон */
+  .slot .num {
+    position: absolute; top: 5px; left: 50%; transform: translateX(-50%);
+    z-index: 3; font: 700 9px/1 "Consolas", monospace; color: #bfe6ff;
+    text-shadow: 0 1px 1px #000;
+  }
+  .slot .swatch {
+    position: absolute; left: 50%; top: 55%; transform: translate(-50%, -50%);
+    width: 30px; height: 34px; z-index: 2; clip-path: var(--hex-pointy);
+    background: linear-gradient(155deg, rgba(255,255,255,.42), rgba(255,255,255,0) 48%), var(--c, #888);
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,.35);
+  }
+  .slot .count {
+    position: absolute; right: 4px; bottom: 6px; z-index: 4;
+    font: 700 10px/1 "Consolas", monospace; color: #fff;
+    text-shadow: 0 1px 2px #000, 0 0 3px #000;
+  }
+  .slot.active { transform: translateY(-8px) scale(1.08); filter: drop-shadow(0 0 7px rgba(159,224,255,.85)); }
+  .slot.active::before { background: #fff; }
+  .slot.active::after  { background: rgba(18, 36, 50, 0.9); }
+
+  /* ---------- Оверлей / меню ---------- */
+  #overlay {
+    position: fixed; inset: 0; z-index: 20;
+    display: flex; align-items: center; justify-content: center;
+    background:
+      radial-gradient(120% 90% at 50% 0%, rgba(30, 70, 100, 0.55), rgba(4, 10, 16, 0.85)),
+      rgba(4, 10, 16, 0.72);
+    color: #eaf6ff; font-family: "Segoe UI", system-ui, sans-serif;
+    text-align: center; cursor: pointer;
+  }
+  #overlay .panel {
+    position: relative; width: min(560px, 92vw);
+    filter: drop-shadow(0 18px 44px rgba(0, 0, 0, 0.55));
+  }
+  #overlay .panel::before {
+    content: ""; position: absolute; inset: 0; clip-path: var(--hex-wide);
+    background: linear-gradient(160deg, var(--accent), rgba(159, 224, 255, 0.12) 60%, rgba(159,224,255,.3));
+  }
+  #overlay .panel-in {
+    position: relative; margin: 2px; padding: 30px 42px 34px;
+    clip-path: var(--hex-wide);
+    background: rgba(8, 20, 30, 0.82);
+    -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
+  }
+  #overlay .logo {
+    width: 58px; height: 66px; margin: 0 auto 12px;
+    clip-path: var(--hex-pointy);
+    background: linear-gradient(160deg, rgba(159,224,255,.4), rgba(159,224,255,.05));
+    display: flex; align-items: center; justify-content: center;
+    font-size: 28px; filter: drop-shadow(0 0 8px rgba(159,224,255,.35));
+  }
+  #overlay h1 { font-size: 40px; letter-spacing: 1.5px; margin-bottom: 6px; }
+  #overlay h1 .dot { color: var(--accent); }
+  #overlay .sub { opacity: .82; margin-bottom: 22px; font-size: 14px; }
+  #overlay .keys {
+    display: grid; grid-template-columns: auto auto; gap: 9px 16px;
+    font-size: 14px; text-align: left; margin: 0 auto 26px; width: max-content;
+    align-items: center;
+  }
+  #overlay .keys b {
+    color: var(--accent); font-weight: 600; white-space: nowrap;
+    clip-path: var(--hex-slim); background: rgba(159, 224, 255, 0.14);
+    padding: 4px 14px; text-align: center;
+  }
+  #overlay .cta {
+    display: inline-block; font-size: 17px; font-weight: 600; color: #06131c;
+    padding: 12px 34px; clip-path: var(--hex-slim);
+    background: linear-gradient(160deg, #cdeeff, var(--accent));
+    filter: drop-shadow(0 0 12px rgba(159, 224, 255, 0.45));
+  }
+  #overlay .hint { margin-top: 16px; font-size: 12px; opacity: .6; }
+
+  /* ---------- Инвентарь (соты, грань = 6 ячеек) ---------- */
+  #inventory {
+    position: fixed; inset: 0; z-index: 25;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(4, 10, 16, 0.55);
+    -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+    color: #eaf6ff; font-family: "Segoe UI", system-ui, sans-serif;
+  }
+  #inventory .inv-panel {
+    position: relative; padding: 20px 30px 16px; text-align: center;
+    background: rgba(8, 20, 30, 0.9);
+    clip-path: var(--hex-wide);
+    filter: drop-shadow(0 18px 44px rgba(0, 0, 0, 0.55));
+    max-width: 96vw; max-height: 96vh;
+  }
+  #inventory .inv-head { font: 700 22px/1 "Segoe UI", system-ui, sans-serif; letter-spacing: 1px; margin-bottom: 12px; }
+  #inventory .inv-head .dim { font-weight: 400; font-size: 13px; opacity: .6; }
+  #inventory .inv-grid { position: relative; margin: 0 auto; }
+  #inventory .cell {
+    position: absolute; width: 40px; height: 46px; cursor: pointer;
+    transform: translate(-50%, -50%);
+  }
+  #inventory .cell::before, #inventory .cell::after { content: ""; position: absolute; clip-path: var(--hex-pointy); }
+  #inventory .cell::before { inset: 0; background: rgba(255, 255, 255, 0.22); transition: background .1s; }
+  #inventory .cell::after  { inset: 2px; background: rgba(12, 18, 24, 0.85); }
+  #inventory .cell:hover::before { background: var(--accent); }
+  #inventory .cell.sel::before { background: #fff; }
+  #inventory .cell .csw {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: 26px; height: 30px; z-index: 2; clip-path: var(--hex-pointy);
+    background: linear-gradient(155deg, rgba(255,255,255,.4), rgba(255,255,255,0) 48%), var(--c, #888);
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,.35);
+  }
+  #inventory .cell .ccount {
+    position: absolute; right: 3px; bottom: 5px; z-index: 3;
+    font: 700 11px/1 "Consolas", monospace; color: #fff;
+    text-shadow: 0 1px 2px #000, 0 0 3px #000;
+  }
+  #inventory .inv-hint { margin-top: 14px; font-size: 12px; opacity: .72; }
+  #inventory .inv-hint b { color: var(--accent); }
+
+  .hidden { display: none !important; }
+
+  /* ---------- Метка версии ---------- */
+  #ver {
+    position: fixed; right: 10px; bottom: 10px; z-index: 10;
+    font: 12px/1.4 "Consolas", "Courier New", monospace;
+    color: #fff; text-shadow: 0 1px 2px #000; opacity: .7; pointer-events: none;
+  }
+</style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <div id="crosshair" class="hidden">
+    <svg viewBox="0 0 100 100" aria-hidden="true">
+      <polygon points="50,6 88,28 88,72 50,94 12,72 12,28" />
+      <circle cx="50" cy="50" r="5" />
+    </svg>
+  </div>
+
+  <div id="hud"></div>
+  <div id="itemname"></div>
+  <div id="hotbar"></div>
+  <div id="ver">v3.3</div>
+
+  <div id="inventory" class="hidden">
+    <div class="inv-panel">
+      <div class="inv-head">Инвентарь <span class="dim">(соты, грань 6 · 91 ячейка)</span></div>
+      <div class="inv-grid" id="invGrid"></div>
+      <div class="inv-hint">Клик по ячейке — обменять с выбранным слотом хотбара · <b>I</b> / <b>ESC</b> — закрыть</div>
+    </div>
+  </div>
+
+  <div id="overlay">
+    <div class="panel">
+      <div class="panel-in">
+        <div class="logo">⛏</div>
+        <h1 id="ovTitle">Pixel<span class="dot">Craft</span></h1>
+        <div class="sub" id="ovSub">Мир из гексагональных призм 200×100×200 (релиз 3.3)</div>
+        <div class="keys">
+          <b>W A S D</b><span>движение</span>
+          <b>Мышь</b><span>обзор (захват курсора)</span>
+          <b>ЛКМ</b><span>сломать блок</span>
+          <b>ПКМ</b><span>поставить блок</span>
+          <b>1–8 / колесо</b><span>выбор блока</span>
+          <b>I</b><span>инвентарь (соты)</span>
+          <b>Пробел</b><span>прыжок</span>
+          <b>Shift</b><span>бег</span>
+          <b>F</b><span>полёт вкл/выкл</span>
+          <b>E / Q</b><span>сломать / поставить</span>
+          <b>ESC</b><span>пауза (освободить мышь)</span>
+          <b>F11 / F12</b><span>полный экран / DevTools</span>
+        </div>
+        <div class="cta" id="ovCta">Нажмите, чтобы играть</div>
+        <div class="hint">Захват мыши включается по клику · I — инвентарь · ESC — пауза</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ?v=… — сбрасывает кэш браузера при обновлениях -->
+  <script src="vendor/three.min.js?v=3.3"></script>
+  <script src="game.js?v=3.3"></script>
+</body>
+</html>
