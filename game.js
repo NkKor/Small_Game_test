@@ -1,5 +1,13 @@
 /* =========================================================================
  * PixelCraft — воксельная песочница на ГЕКСАГОНАЛЬНЫХ ПРИЗМАХ
+ * Релиз 3.4:
+ *   - тело игрока смещено ниже: при взгляде вниз видны грудь и ноги,
+ *     торс наклонён вперёд (forward offset), чтобы не заслонять обзор
+ *   - деревья рандомизированы по высоте: от ~3 ростов игрока (6 блоков)
+ *     до 50; у высоких деревьев толстый ствол (гекс-кластер) и крупная крона
+ *   - окно инвентаря: рядом с гексагоном инвентаря — гексагон предпросмотра
+ *     персонажа (соприкасаются гранью) + 7 слотов экипировки по свободным
+ *     граням: шлем, нагрудник, штаны, сапоги, перчатки, оружие (2 руки)
  * Релиз 3.3:
  *   - частицы «рассыпания» при разрушении блока (фрагменты текстуры блока)
  *   - инвентарь-соты: грань 6 ячеек (91 ячейка), логика «как в Minecraft»:
@@ -28,13 +36,13 @@
 (function () {
   'use strict';
 
-  const VERSION = '3.3';
+  const VERSION = '3.4';
   const THREE = window.THREE;
 
   /* ----------------------------- Константы мира ----------------------------- */
   const HEX_COLS = 200;      // столбцов гекс-решётки
   const HEX_ROWS = 200;      // рядов
-  const WORLD_Y = 100;       // высота
+  const WORLD_Y = 130;       // высота (поднято для высоких деревьев до 50 блоков)
   const R = 1.0;             // радиус описанной окружности гекса (размер)
   const HEX_W = Math.sqrt(3) * R;   // ширина гекса (по X)
   const HEX_V = 1.5 * R;            // вертикальный шаг рядов (по Z)
@@ -102,6 +110,43 @@
       if (!inventory[i]) { const add = Math.min(n, MAX_STACK); inventory[i] = { type, count: add }; n -= add; }
     }
     return true;
+  }
+
+  /* ----------------------------- Экипировка (7 слотов) ----------------------------- */
+  // Слоты вокруг гекса предпросмотра: шлем, нагрудник, штаны, сапоги,
+  // перчатки, оружие (правая/левая рука). Надеть можно любой предмет из
+  // инвентаря — кукла в UI раскрашивается его цветом.
+  const equipment = {
+    head: null, chest: null, legs: null, feet: null, gloves: null,
+    mainhand: null, offhand: null,
+  };
+  // Углы (в градусах, 0 = вправо, против часовой): 60..300 шаг 40° — свободные
+  // грани гекса (правая грань занята «сотой» инвентаря).
+  const EQ_DEFS = [
+    { key: 'mainhand', label: 'Оружие',      ang: 60 },
+    { key: 'head',     label: 'Шлем',        ang: 100 },
+    { key: 'chest',    label: 'Нагрудник',   ang: 140 },
+    { key: 'legs',     label: 'Штаны',       ang: 180 },
+    { key: 'feet',     label: 'Сапоги',      ang: 220 },
+    { key: 'gloves',   label: 'Перчатки',    ang: 260 },
+    { key: 'offhand',  label: 'Вторая рука', ang: 300 },
+  ];
+  // Части куклы: слот, который их красит, и цвет по умолчанию.
+  // Цвета — литеральные rgb (совпадают с телом в 3D: SKIN/SHIRT/PANTS/SHOE).
+  const APART_DEF = {
+    head:  { slot: 'head',   c: 'rgb(216,160,106)' },   // SKIN
+    torso: { slot: 'chest',  c: 'rgb(63,127,191)' },    // SHIRT
+    larm:  { slot: 'gloves', c: 'rgb(63,127,191)' },
+    rarm:  { slot: 'gloves', c: 'rgb(63,127,191)' },
+    lleg:  { slot: 'legs',   c: 'rgb(59,74,99)' },      // PANTS
+    rleg:  { slot: 'legs',   c: 'rgb(59,74,99)' },
+    lboot: { slot: 'feet',   c: 'rgb(38,38,43)' },      // SHOE
+    rboot: { slot: 'feet',   c: 'rgb(38,38,43)' },
+  };
+  function itemColor(item) {
+    if (!item) return null;
+    const def = BLOCK_DEFS[item.type];
+    return def ? `rgb(${def.ui[0]},${def.ui[1]},${def.ui[2]})` : null;
   }
 
   /* ----------------------------- Геометрия гекса ----------------------------- */
@@ -305,19 +350,41 @@
   }
   function layerAtDepth(depth) { let acc = 0; for (const l of LAYERS) { acc += l.t; if (depth < acc) return l.type; } return STONE; }
 
-  function plantTree(col, groundH, row, rnd) {
-    const trunkH = 4 + Math.floor(rnd() * 3);
-    for (let i = 0; i < trunkH; i++) setBlockRaw(col, groundH + i, row, LOG);
-    const top = groundH + trunkH;
-    if (top + 1 > maxSolidY) maxSolidY = top + 1;
-    for (let dy = -1; dy <= 1; dy++) {
-      const rad = dy === 1 ? 1 : 2;
-      for (let dc = -2; dc <= 2; dc++) {
-        for (let dr = -2; dr <= 2; dr++) {
+  // Статистика дерева по одному случайному числу [0..1) (rnd вызывается один раз).
+  // trunk — высота ствола: min = 3 ростов игрока (6 блоков), max = 50 (или меньше,
+  // если упрёмся в верх мира). Чем выше дерево — тем толще ствол и крупнее крона.
+  function treeStats(groundH, rnd) {
+    const maxT = Math.min(50, WORLD_Y - groundH - 12);
+    const trunk = 6 + Math.floor(Math.pow(rnd(), 1.3) * (maxT - 5));
+    const trunkR = trunk < 24 ? 1 : (trunk < 42 ? 2 : 3);
+    const crownR = 2 + Math.floor(trunk / 8);
+    const crownLayers = 3 + Math.floor((trunk - 6) / 8);
+    return { trunk, trunkR, crownR, crownLayers, reserve: crownR + 2 };
+  }
+
+  function plantTree(col, groundH, row, st) {
+    // ствол — гекс-кластер радиуса trunkR (толстые деревья из нескольких призм)
+    for (let i = 0; i < st.trunk; i++) {
+      for (let dc = -st.trunkR; dc <= st.trunkR; dc++) {
+        for (let dr = -st.trunkR; dr <= st.trunkR; dr++) {
+          if (hexDist(col, row, col + dc, row + dr) > st.trunkR) continue;
+          setBlockRaw(col + dc, groundH + i, row + dr, LOG);
+        }
+      }
+    }
+    const top = groundH + st.trunk;
+    if (top + st.crownLayers > maxSolidY) maxSolidY = top + st.crownLayers;
+    // крона — сглаженный «конус» из дисков листвы: нижний ярус шире crownR,
+    // к вершине радиус плавно сужается до толщины ствола
+    for (let ly = 0; ly < st.crownLayers; ly++) {
+      const y = top + ly;
+      const frac = ly / (st.crownLayers - 1);
+      const rad = Math.max(st.trunkR, Math.round(st.crownR * (1.2 - frac * 1.2)));
+      for (let dc = -rad; dc <= rad; dc++) {
+        for (let dr = -rad; dr <= rad; dr++) {
           if (hexDist(col, row, col + dc, row + dr) > rad) continue;
-          if (dc === 0 && dr === 0 && dy <= 0) continue;
-          const lc = col + dc, lr = row + dr, ly = top + dy;
-          if (inGrid(lc, lr) && ly >= 0 && ly < WORLD_Y && data[idx(lc, ly, lr)] === AIR) data[idx(lc, ly, lr)] = LEAVES;
+          const lc = col + dc, lr = row + dr;
+          if (inGrid(lc, lr) && y >= 0 && y < WORLD_Y && data[idx(lc, y, lr)] === AIR) data[idx(lc, y, lr)] = LEAVES;
         }
       }
     }
@@ -338,13 +405,20 @@
     for (let col = 3; col < HEX_COLS - 3; col++) {
       for (let row = 3; row < HEX_ROWS - 3; row++) {
         if (hash2(col * 3 + 1, row * 3 + 7) > 0.015) continue;
-        let free = true;
-        for (let dc = -2; dc <= 2 && free; dc++) for (let dr = -2; dr <= 2; dr++) if (taken.has((col + dc) + ',' + (row + dr))) { free = false; break; }
-        if (!free) continue;
         const h = terrainHeight(col, row);
         if (getBlock(col, h, row) !== TURF) continue;
-        plantTree(col, h + 1, row, () => hash2(col * 13 + 5, row * 17 + 3));
-        for (let dc = -2; dc <= 2; dc++) for (let dr = -2; dr <= 2; dr++) taken.add((col + dc) + ',' + (row + dr));
+        const st = treeStats(h + 1, () => hash2(col * 13 + 5, row * 17 + 3));
+        let free = true;
+        for (let dc = -st.reserve; dc <= st.reserve && free; dc++) {
+          for (let dr = -st.reserve; dr <= st.reserve; dr++) {
+            if (taken.has((col + dc) + ',' + (row + dr))) { free = false; break; }
+          }
+        }
+        if (!free) continue;
+        plantTree(col, h + 1, row, st);
+        for (let dc = -st.reserve; dc <= st.reserve; dc++) {
+          for (let dr = -st.reserve; dr <= st.reserve; dr++) taken.add((col + dc) + ',' + (row + dr));
+        }
       }
     }
   }
@@ -453,13 +527,14 @@
   limb(0.125, 0.105, 0.74, PANTS,  0.135, 0.37, 0);
   limb(0.105, 0.10, 0.10, SHOE, -0.135, 0.04, 0.03);
   limb(0.105, 0.10, 0.10, SHOE,  0.135, 0.04, 0.03);
-  // торс
-  limb(0.25, 0.24, 0.68, SHIRT, 0, 1.04, 0);
-  // руки игрока (рукав + кисть)
-  limb(0.095, 0.085, 0.46, SHIRT, -0.345, 1.05, 0);
-  limb(0.095, 0.085, 0.46, SHIRT,  0.345, 1.05, 0);
-  limb(0.085, 0.075, 0.18, SKIN, -0.345, 0.71, 0);
-  limb(0.085, 0.075, 0.18, SKIN,  0.345, 0.71, 0);
+  // торс — опущен ниже (0.60..1.20) и слегка вынесен вперёд, чтобы при взгляде
+  // вниз видеть грудь и ноги, а не бесконечную грудь перед глазами
+  limb(0.23, 0.22, 0.60, SHIRT, 0, 0.90, -0.10);
+  // руки прижаты к корпусу (x = ±0.245), плечи ~1.11, кисти ~0.60
+  limb(0.095, 0.085, 0.46, SHIRT, -0.245, 0.88, -0.08);
+  limb(0.095, 0.085, 0.46, SHIRT,  0.245, 0.88, -0.08);
+  limb(0.085, 0.075, 0.18, SKIN, -0.245, 0.60, -0.08);
+  limb(0.085, 0.075, 0.18, SKIN,  0.245, 0.60, -0.08);
 
   /* ----------------------------- Рука (viewmodel, взмах на клик) ----------------------------- */
   const armPivot = new THREE.Group();
@@ -745,6 +820,11 @@
   const invEl = document.getElementById('inventory');
   const invGridEl = document.getElementById('invGrid');
   const invCells = [];   // DOM ячейки сот по индексу инвентаря
+  const invPanelEl = document.querySelector('#inventory .inv-panel');
+  const invLayoutEl = document.getElementById('invLayout');
+  const charAreaEl = document.getElementById('charArea');
+  const eqSlotsEl = document.getElementById('eqSlots');
+  const eqSlots = [];
 
   // Хотбар — слоты 0..7 (первые ячейки инвентаря): номер + образец + счётчик
   for (let i = 0; i < HOTBAR_SIZE; i++) {
@@ -779,6 +859,7 @@
       itemNameEl.textContent = item ? `${BLOCK_DEFS[item.type].name}${item.count > 1 ? ' ×' + item.count : ''}` : '—';
       if (started) itemNameEl.classList.add('show');
     }
+    refreshEquipment();
   }
   function selectIndex(i) { if (i < 0 || i >= HOTBAR_SIZE) return; selectedSlot = i; refreshHotbar(); }
 
@@ -813,6 +894,95 @@
   }
   buildInventoryGrid();
 
+  /* ----------------------------- Панель персонажа + экипировка ----------------------------- */
+  function buildCharPanel() {
+    // 7 слотов вокруг гекса предпросмотра (позиции выставляет resizeCharPanel)
+    eqSlotsEl.innerHTML = '';
+    eqSlots.length = 0;
+    EQ_DEFS.forEach((def) => {
+      const d = document.createElement('div');
+      d.className = 'eq-slot';
+      d.dataset.eq = def.key;
+      d.innerHTML = '<span class="esw"></span><span class="elabel">' + def.label + '</span>';
+      d.addEventListener('click', () => equipCellClick(def.key));
+      eqSlotsEl.appendChild(d);
+      eqSlots.push(d);
+    });
+    // кукла персонажа (части раскрашивает refreshEquipment)
+    const av = document.getElementById('avatar');
+    av.innerHTML = '';
+    ['head', 'torso', 'larm', 'rarm', 'lleg', 'rleg', 'lboot', 'rboot'].forEach((p) => {
+      const el = document.createElement('div');
+      el.className = 'apart ' + p;
+      el.dataset.part = p;
+      av.appendChild(el);
+    });
+    ['mainhand', 'offhand'].forEach((h) => {
+      const el = document.createElement('span');
+      el.className = 'aweapon ' + h;
+      el.dataset.hand = h;
+      av.appendChild(el);
+    });
+  }
+  // Гекс предпросмотра — ТОТ ЖЕ РАЗМЕР, что и гекс инвентаря (меряем панель).
+  // Вызывается при каждом открытии: #inventory скрыт (display:none) при загрузке.
+  function resizeCharPanel() {
+    const W = invPanelEl.offsetWidth, H = invPanelEl.offsetHeight;
+    if (W < 20 || H < 20) return;
+    charAreaEl.style.width = W + 'px';
+    charAreaEl.style.height = H + 'px';
+    const scale = Math.min(1,
+      (window.innerWidth - 48) / (2 * W),
+      (window.innerHeight - 120) / H);
+    invLayoutEl.style.transform = 'scale(' + scale + ')';
+    // слоты по свободным граням гекса, на равном расстоянии от центра
+    const R = W / 2 + 34;
+    eqSlots.forEach((el, i) => {
+      const a = EQ_DEFS[i].ang * Math.PI / 180;
+      el.style.left = (W / 2 + Math.cos(a) * R) + 'px';
+      el.style.top = (H / 2 - Math.sin(a) * R) + 'px';
+    });
+  }
+  function refreshEquipment() {
+    if (!eqSlots.length) return;
+    eqSlots.forEach((el, i) => {
+      const def = EQ_DEFS[i];
+      const item = equipment[def.key];
+      const sw = el.querySelector('.esw');
+      const c = itemColor(item);
+      if (c) { sw.style.setProperty('--c', c); sw.style.display = 'block'; }
+      else { sw.style.display = 'none'; }
+      el.classList.toggle('filled', !!item);
+      const name = item ? BLOCK_DEFS[item.type].name : '';
+      el.title = def.label + (item ? ' — ' + name : ' (пусто)');
+    });
+    document.querySelectorAll('#avatar .apart').forEach((el) => {
+      const def = APART_DEF[el.dataset.part];
+      if (!def) return;
+      const item = equipment[def.slot];
+      el.style.background = itemColor(item) || def.c;
+    });
+    // оружие: видно только когда надето
+    document.querySelectorAll('#avatar .aweapon').forEach((el) => {
+      const item = equipment[el.dataset.hand];
+      if (item) { el.style.background = itemColor(item); el.style.display = ''; }
+      else { el.style.display = 'none'; }
+    });
+  }
+  function equipCellClick(key) {
+    const src = inventory[selectedSlot];
+    const cur = equipment[key];
+    if (src) {
+      inventory[selectedSlot] = cur;                 // снятое (или пусто) — в слот хотбара
+      equipment[key] = { type: src.type, count: 1 }; // надеть 1 шт. из стака
+    } else if (cur) {
+      equipment[key] = null;                         // снять в инвентарь
+      invAdd(cur.type, 1);
+    }
+    refreshHotbar(); refreshInventory(); refreshEquipment();
+  }
+  buildCharPanel();
+
   function refreshInventory() {
     invCells.forEach((d, i) => {
       const item = inventory[i];
@@ -836,6 +1006,8 @@
     invOpen = true; paused = true;
     refreshInventory();
     invEl.classList.remove('hidden'); crosshair.classList.add('hidden');
+    resizeCharPanel();                 // размер гекса предпросмотра — после показа панели
+    refreshEquipment();
     if (locked && document.exitPointerLock) document.exitPointerLock();
   }
   function closeInventory() {
@@ -856,7 +1028,7 @@
     if (overlayTitle) overlayTitle.innerHTML = isPause ? 'Пауза' : 'Pixel<span class="dot">Craft</span>';
     if (overlaySub) overlaySub.textContent = isPause
       ? 'Игра на паузе — мышь свободна'
-      : 'Мир из гексагональных призм 200×100×200 (релиз 3.3)';
+      : 'Мир из гексагональных призм 200×130×200 (релиз 3.4)';
     if (overlayCta) overlayCta.textContent = isPause ? 'Нажмите, чтобы продолжить' : 'Нажмите, чтобы играть';
   }
   function hideOverlay() { overlay.classList.add('hidden'); crosshair.classList.remove('hidden'); }
@@ -1038,6 +1210,7 @@
     getBlock, terrainHeight, breakBlock, placeBlock, getTargetBlock, decayLeavesAround, applyEdits,
     hexToWorld, worldToHex, nbCell, HEX_VERTS, VERSION,
     inventory, selectedSlot, selectedBlock, invAdd, selectIndex,
+    equipment, EQ_DEFS, refreshEquipment, equipCellClick, resizeCharPanel,
     spawnParticles, swingArm, toggleInventory, openInventory, closeInventory,
     updateParticles, updateArm,
     refreshHotbar, refreshInventory,

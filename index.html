@@ -137,7 +137,7 @@
   }
   #overlay .hint { margin-top: 16px; font-size: 12px; opacity: .6; }
 
-  /* ---------- Инвентарь (соты, грань = 6 ячеек) ---------- */
+  /* ---------- Инвентарь: гекс экипировки + соты (грань = 6 ячеек) ---------- */
   #inventory {
     position: fixed; inset: 0; z-index: 25;
     display: flex; align-items: center; justify-content: center;
@@ -145,12 +145,19 @@
     -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
     color: #eaf6ff; font-family: "Segoe UI", system-ui, sans-serif;
   }
+  #inventory .inv-layout {
+    display: flex; align-items: center; justify-content: center; gap: 0;
+    transform-origin: center center;
+  }
+  /* Оба гекса — pointy-top: у них вертикальные боковые грани, которыми панели
+     соприкасаются по одной грани. Отступы подобраны так, чтобы ряды сот
+     не срезались диагональными гранями гекса. flex: 0 0 auto — не даём
+     flex-контейнеру сжимать панели (гексы должны оставаться одного размера). */
   #inventory .inv-panel {
-    position: relative; padding: 20px 30px 16px; text-align: center;
+    position: relative; flex: 0 0 auto; padding: 66px 44px 54px; text-align: center;
     background: rgba(8, 20, 30, 0.9);
-    clip-path: var(--hex-wide);
+    clip-path: var(--hex-pointy);
     filter: drop-shadow(0 18px 44px rgba(0, 0, 0, 0.55));
-    max-width: 96vw; max-height: 96vh;
   }
   #inventory .inv-head { font: 700 22px/1 "Segoe UI", system-ui, sans-serif; letter-spacing: 1px; margin-bottom: 12px; }
   #inventory .inv-head .dim { font-weight: 400; font-size: 13px; opacity: .6; }
@@ -178,6 +185,64 @@
   #inventory .inv-hint { margin-top: 14px; font-size: 12px; opacity: .72; }
   #inventory .inv-hint b { color: var(--accent); }
 
+  /* ---------- Панель экипировки (гекс предпросмотра + 7 слотов) ---------- */
+  #inventory .char-area {
+    position: relative; flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #inventory .preview-hex {
+    position: absolute; inset: 0; clip-path: var(--hex-pointy);
+    background:
+      radial-gradient(120% 120% at 50% 18%, rgba(159,224,255,0.16), rgba(159,224,255,0.02) 62%),
+      rgba(8, 20, 30, 0.9);
+    filter: drop-shadow(0 18px 44px rgba(0, 0, 0, 0.55));
+  }
+  #inventory .preview-hex::after {
+    content: ""; position: absolute; inset: 2px; clip-path: var(--hex-pointy);
+    background: none; box-shadow: inset 0 0 0 1px rgba(159, 224, 255, 0.14);
+  }
+  /* кукла персонажа */
+  #inventory .avatar {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: 110px; height: 200px; pointer-events: none; z-index: 2;
+  }
+  #inventory .apart { position: absolute; transition: background .15s; }
+  #inventory .apart.head  { left: 50%; top: 0;  width: 40px; height: 44px; transform: translateX(-50%); clip-path: var(--hex-pointy); }
+  #inventory .apart.torso { left: 50%; top: 50px; width: 58px; height: 66px; transform: translateX(-50%); clip-path: var(--hex-wide); }
+  #inventory .apart.larm  { left: 2px;  top: 52px; width: 24px; height: 46px; clip-path: var(--hex-slim); }
+  #inventory .apart.rarm  { right: 2px; top: 52px; width: 24px; height: 46px; clip-path: var(--hex-slim); }
+  #inventory .apart.lleg  { left: 22px; top: 122px; width: 28px; height: 60px; clip-path: var(--hex-slim); }
+  #inventory .apart.rleg  { right: 22px; top: 122px; width: 28px; height: 60px; clip-path: var(--hex-slim); }
+  #inventory .apart.lboot { left: 19px; top: 176px; width: 34px; height: 20px; clip-path: var(--hex-slim); }
+  #inventory .apart.rboot { right: 19px; top: 176px; width: 34px; height: 20px; clip-path: var(--hex-slim); }
+  #inventory .aweapon {
+    position: absolute; display: block; width: 11px; height: 72px;
+    clip-path: var(--hex-slim); background: #888; z-index: 1;
+  }
+  #inventory .aweapon.mainhand { right: -10px; top: 6px; transform: rotate(16deg); }
+  #inventory .aweapon.offhand  { left: -10px;  top: 26px; transform: rotate(-16deg); }
+  /* 7 слотов экипировки вокруг гекса */
+  #inventory .eq-slot {
+    position: absolute; width: 52px; height: 58px;
+    transform: translate(-50%, -50%); cursor: pointer;
+    filter: drop-shadow(0 3px 7px rgba(0, 0, 0, 0.45)); z-index: 3;
+  }
+  #inventory .eq-slot::before, #inventory .eq-slot::after { content: ""; position: absolute; clip-path: var(--hex-pointy); }
+  #inventory .eq-slot::before { inset: 0; background: rgba(255, 255, 255, 0.30); transition: background .12s; }
+  #inventory .eq-slot::after  { inset: 2px; background: rgba(12, 18, 24, 0.90); }
+  #inventory .eq-slot:hover::before { background: var(--accent); }
+  #inventory .eq-slot .esw {
+    position: absolute; left: 50%; top: 46%; transform: translate(-50%, -50%);
+    width: 25px; height: 29px; clip-path: var(--hex-pointy);
+    background: linear-gradient(155deg, rgba(255,255,255,.4), rgba(255,255,255,0) 48%), var(--c, #888);
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,.35);
+  }
+  #inventory .eq-slot .elabel {
+    position: absolute; left: 50%; top: calc(100% + 6px); transform: translateX(-50%);
+    font: 600 9px/1 "Segoe UI", system-ui, sans-serif; white-space: nowrap;
+    color: #cfe9ff; text-shadow: 0 1px 2px #000, 0 0 4px #000; letter-spacing: .2px;
+  }
+
   .hidden { display: none !important; }
 
   /* ---------- Метка версии ---------- */
@@ -201,13 +266,20 @@
   <div id="hud"></div>
   <div id="itemname"></div>
   <div id="hotbar"></div>
-  <div id="ver">v3.3</div>
+  <div id="ver">v3.4</div>
 
   <div id="inventory" class="hidden">
-    <div class="inv-panel">
-      <div class="inv-head">Инвентарь <span class="dim">(соты, грань 6 · 91 ячейка)</span></div>
-      <div class="inv-grid" id="invGrid"></div>
-      <div class="inv-hint">Клик по ячейке — обменять с выбранным слотом хотбара · <b>I</b> / <b>ESC</b> — закрыть</div>
+    <div class="inv-layout" id="invLayout">
+      <div class="char-area" id="charArea">
+        <div class="preview-hex" id="previewHex"></div>
+        <div class="avatar" id="avatar"></div>
+        <div class="eq-slots" id="eqSlots"></div>
+      </div>
+      <div class="inv-panel">
+        <div class="inv-head">Инвентарь <span class="dim">(соты, грань 6 · 91 ячейка)</span></div>
+        <div class="inv-grid" id="invGrid"></div>
+        <div class="inv-hint">Клик по ячейке — обменять с выбранным слотом хотбара · клик по слоту экипировки — надеть/снять · <b>I</b>/<b>ESC</b> — закрыть</div>
+      </div>
     </div>
   </div>
 
@@ -216,14 +288,14 @@
       <div class="panel-in">
         <div class="logo">⛏</div>
         <h1 id="ovTitle">Pixel<span class="dot">Craft</span></h1>
-        <div class="sub" id="ovSub">Мир из гексагональных призм 200×100×200 (релиз 3.3)</div>
+        <div class="sub" id="ovSub">Мир из гексагональных призм 200×130×200 (релиз 3.4)</div>
         <div class="keys">
           <b>W A S D</b><span>движение</span>
           <b>Мышь</b><span>обзор (захват курсора)</span>
           <b>ЛКМ</b><span>сломать блок</span>
           <b>ПКМ</b><span>поставить блок</span>
           <b>1–8 / колесо</b><span>выбор блока</span>
-          <b>I</b><span>инвентарь (соты)</span>
+          <b>I</b><span>инвентарь + экипировка</span>
           <b>Пробел</b><span>прыжок</span>
           <b>Shift</b><span>бег</span>
           <b>F</b><span>полёт вкл/выкл</span>
@@ -232,13 +304,13 @@
           <b>F11 / F12</b><span>полный экран / DevTools</span>
         </div>
         <div class="cta" id="ovCta">Нажмите, чтобы играть</div>
-        <div class="hint">Захват мыши включается по клику · I — инвентарь · ESC — пауза</div>
+        <div class="hint">Захват мыши включается по клику · I — инвентарь + экипировка · ESC — пауза</div>
       </div>
     </div>
   </div>
 
   <!-- ?v=… — сбрасывает кэш браузера при обновлениях -->
-  <script src="vendor/three.min.js?v=3.3"></script>
-  <script src="game.js?v=3.3"></script>
+  <script src="vendor/three.min.js?v=3.4"></script>
+  <script src="game.js?v=3.4"></script>
 </body>
 </html>

@@ -1,7 +1,7 @@
 {
   "name": "pixelcraft",
   "productName": "PixelCraft",
-  "version": "3.3.0",
+  "version": "3.4.0",
   "description": "PixelCraft — воксельная песочница на гексагональных призмах (Three.js + Electron)",
   "main": "main.js",
   "scripts": {
